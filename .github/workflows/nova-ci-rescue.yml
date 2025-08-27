@@ -1,0 +1,127 @@
+name: Nova CI-Rescue Demo
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  test-and-rescue:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          ref: ${{ github.event.pull_request.head.ref || github.ref }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # Phase 1: Pre-check (continue on error)
+      - name: Pre-check tests
+        id: precheck
+        continue-on-error: true
+        run: |
+          echo "::group::Running tests"
+          pytest tests/ -v --json-report --json-report-file=junit_report.json
+          TEST_RESULT=$?
+          echo "::endgroup::"
+
+          if [ $TEST_RESULT -eq 0 ]; then
+            echo "✅ All tests passed!"
+            echo "status=passed" >> $GITHUB_OUTPUT
+          else
+            echo "❌ Tests failed"
+            echo "status=failed" >> $GITHUB_OUTPUT
+
+            FAILED_COUNT=$(python -c "import json; data=json.load(open('junit_report.json')); print(len([t for t in data['tests'] if t['outcome'] == 'failed']))")
+            echo "failed_count=$FAILED_COUNT" >> $GITHUB_OUTPUT
+          fi
+
+      # Phase 2: Nova Rescue (only if tests failed)
+      - name: Install Nova CI-Rescue
+        if: steps.precheck.outputs.status == 'failed'
+        run: |
+          # Install Nova from GitHub
+          pip install git+https://github.com/seb-nova/nova-ci-rescue.git
+
+      - name: Run Nova CI-Rescue
+        id: nova_rescue
+        if: steps.precheck.outputs.status == 'failed'
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          echo "🤖 Nova CI-Rescue: Detected ${{ steps.precheck.outputs.failed_count }} failing tests"
+
+          # Run Nova with CI constraints
+          echo "::group::Nova auto-fix"
+          nova fix . \
+            --max-iters 2 \
+            --timeout 120 \
+            --pytest-args "tests/" \
+            || echo "Nova completed"
+          echo "::endgroup::"
+
+          # Check if Nova made changes
+          if git diff --quiet; then
+            echo "fixed=false" >> $GITHUB_OUTPUT
+          else
+            echo "fixed=true" >> $GITHUB_OUTPUT
+            git diff > nova_fix.patch
+          fi
+
+      # Phase 3: Apply fix (auto-apply for demo)
+      - name: Apply Nova fix
+        if: |
+          steps.precheck.outputs.status == 'failed' && 
+          steps.nova_rescue.outputs.fixed == 'true'
+        run: |
+          echo "📝 Applying Nova's fix..."
+
+          git config user.name "Nova CI-Rescue Bot"
+          git config user.email "nova-bot@example.com"
+
+          git add -A
+          git commit -m "🤖 Nova CI-Rescue: Auto-fix ${{ steps.precheck.outputs.failed_count }} failing tests"
+
+          if [ "${{ github.event_name }}" == "pull_request" ]; then
+            git push origin HEAD:${{ github.event.pull_request.head.ref }}
+          else
+            git push origin HEAD
+          fi
+
+      # Phase 4: Verify fix
+      - name: Verify fix
+        if: steps.precheck.outputs.status == 'failed'
+        run: |
+          echo "::group::Verifying fix"
+          pytest tests/ -v
+          echo "::endgroup::"
+          echo "✅ All tests now pass!"
+
+      # Upload artifacts
+      - name: Upload artifacts
+        if: always() && steps.precheck.outputs.status == 'failed'
+        uses: actions/upload-artifact@v3
+        with:
+          name: nova-rescue-artifacts-${{ github.run_number }}
+          path: |
+            junit_report.json
+            nova_fix.patch
