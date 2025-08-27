@@ -15,6 +15,7 @@ permissions:
 jobs:
   test-and-rescue:
     runs-on: ubuntu-latest
+    environment: Secrets
 
     steps:
       - name: Checkout code

@@ -69,8 +69,7 @@ mkdir -p .nova
 nova fix . \
     --max-iters 2 \
     --timeout 120 \
-    --pytest-args "tests/" \
-    --quiet
+    --pytest-args "tests/"
 
 # Generate patch artifact
 git diff src/calculator.py > "$PATCH_FILE"
