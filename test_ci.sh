@@ -22,8 +22,9 @@ if [ ! -f ".venv/bin/activate" ]; then
     source .venv/bin/activate
     pip install -r requirements.txt
     
-    # Install Nova CI-Rescue
-    pip install git+https://github.com/seb-nova/nova-ci-rescue.git
+    # Install Nova CI-Rescue from demo branch
+    pip uninstall -y nova nova-ci-rescue 2>/dev/null || true
+    pip install --force-reinstall --no-cache-dir "git+https://github.com/novasolve/ci-auto-rescue.git@demo"
 else
     source .venv/bin/activate
 fi
